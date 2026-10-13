@@ -1,0 +1,8 @@
+# 本项目所有文件都是给 Linux 用的（shell / systemd unit / python / 配置）。
+# 强制以 LF 存储并检出，避免 Windows 上克隆后 shell 脚本因 CRLF 报
+# "set: Illegal option -" 之类的错误。
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.zip binary

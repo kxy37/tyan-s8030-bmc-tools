@@ -1,0 +1,12 @@
+[Unit]
+Description=Periodically re-assert BMC sensor thresholds
+
+[Timer]
+# 开机后很快补一次：主机重启往往正是因为 BMC 掉过电，而掉电会让阈值复位
+OnBootSec=30s
+# 之后定期检查，这样即使主机没重启、只有 BMC 被单独复位也能补回
+OnUnitActiveSec=10min
+Unit=bmc-thresholds.service
+
+[Install]
+WantedBy=timers.target

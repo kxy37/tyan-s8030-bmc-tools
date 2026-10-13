@@ -1,0 +1,10 @@
+[Unit]
+Description=Re-assert BMC sensor thresholds (S8030 BMC resets them on AC loss)
+Documentation=file:/usr/local/sbin/bmc-thresholds.sh
+ConditionPathExists=/dev/ipmi0
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/bmc-thresholds.sh /etc/bmc-thresholds.conf
+StandardOutput=journal
+StandardError=journal

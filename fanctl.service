@@ -1,0 +1,24 @@
+[Unit]
+Description=TYAN S8030 CPU fan temperature curve (auto fan control via IPMI OEM)
+Documentation=file:/usr/local/sbin/fanctl.py
+After=multi-user.target
+# 没有带内 IPMI 接口就没有意义，直接跳过
+ConditionPathExists=/dev/ipmi0
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /usr/local/sbin/fanctl.py --config /etc/fanctl.conf
+
+# 兜底：即使程序没来得及处理 SIGTERM，也要把风扇放回一个安全转速，
+# 而不是停在曲线最后一次算出的低速值上。
+# 注意：通道号 0x00 与占空比 0x3c(=60%) 是 TYAN S8030 的取值，
+#       换主板请同步修改（或删掉本行，程序自身已处理 SIGTERM）。
+ExecStopPost=/bin/sh -c '/usr/bin/ipmitool raw 0x2e 0x44 0xfd 0x19 0x00 0x00 0x01 0x3c || true'
+
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
