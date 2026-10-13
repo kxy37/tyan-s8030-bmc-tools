@@ -46,6 +46,11 @@ ipmitool raw 0x2e 0x44 0xfd 0x19 0x00 <风扇通道号> 0x01 <占空比 0x00~0x6
 
 `fanctl` 就是：**定时读 CPU 温度 → 按曲线算目标占空比 → 用上面这条命令下发**。
 
+> 📖 **依据**：主板手册 [p72 Hardware Health Configuration](docs/README.md) 说明了这个风扇策略 ——
+> 只有 `Fan Speed Control`（[Manual] / [Full Speed]）和 `PWM Minimal Duty Cycle` 两个选项，
+> **没有温度曲线这种东西**。所以"按温度调速"只能在主机侧自己实现。
+> （顺带：手册 p72 还写明，装了 GeForce/Quadro 显卡时应把 `Fan Speed Control` 改成 `[Full Speed]`。）
+
 ### 实测效果（S8030GM2NE + EPYC 7K62）
 
 | CPU 温度 | 占空比 | CPU 风扇转速 |
@@ -88,9 +93,11 @@ Memory ... / Temperature MB_Air_Inlet | Upper Critical going high | Reading 50 >
 
 ### 原因
 
-`MB_Air_Inlet` 是主板上的**进风区温度**传感器（手册 Appendix II：
-"Temperature of the M/B Air Inlet Area"，位置在主板下边缘、紧贴 SYS_FAN2/FAN3 插座旁），
-出厂设定**标称 32°C、上限只有 50°C**。
+`MB_Air_Inlet` 是主板上的**进风区温度**传感器，出厂设定**标称 32°C、上限只有 50°C**。
+
+> 📖 **依据**：主板手册 [p141–144 Appendix II: Fan and Temp Sensors](docs/README.md) 给出了它的
+> 定义和板图位置 —— "Temperature of the M/B Air Inlet Area"，位于主板下边缘、
+> **紧贴 SYS_FAN2/FAN3 插座旁**。
 
 装上显卡后，显卡散热鳍片的尾气**正好吹在这颗传感器上**，于是它测到的其实是
 **显卡尾气温度**，很容易撞到 50°C 触发告警。
@@ -302,12 +309,47 @@ sudo ipmitool sel elist | grep -i "Upper Critical" | tail -5
 - **参考实现**：
   - [BiteMeIfYouCan/TYANS8030FAN](https://github.com/BiteMeIfYouCan/TYANS8030FAN) —— Python，多分区曲线
   - [sonmihpc/AutoFan](https://github.com/sonmihpc/AutoFan) —— Go，GPU 温度驱动
-- **寄存器级方案**（本项目未采用，但值得一看）：
-  [larkinwc/p2afan](https://github.com/larkinwc/p2afan) —— 绕开 IPMI，直接写 ASPEED
-  AST2500 PWM 寄存器。**如果你要调速的是 3-pin 风扇，或者需要多通道动态曲线，
-  这个项目更合适**（前提是换成 4-pin 风扇）
+- **寄存器级方案（本项目未采用）**：
+  [larkinwc/p2afan](https://github.com/larkinwc/p2afan) —— 它**绕开厂商的 IPMI 命令**，
+  从主机侧经 ASPEED 的 P2A 桥直接写 PWM 占空比寄存器。
+
+  注意它的**执行方式和本项目是同一个层级**（都是写 ASPEED 的 PWM 占空比寄存器），
+  区别只在于用什么途径去写。所以：
+
+  | | 本项目（fanctl） | p2afan |
+  |---|---|---|
+  | 写入对象 | ASPEED PWM 占空比寄存器 | **同一个寄存器** |
+  | 途径 | 厂商 IPMI 命令 `0x2e 0x44`（经 BMC 转发） | 主机侧 P2A 桥直接写 |
+  | 能控几个通道 | **只有厂商命令暴露的那些**（S8030GM2NE 上实测只有 CPU_FAN） | **全部** PWM 通道 |
+  | 依赖 | 需要厂商命令存在 | 不依赖厂商命令，但要 P2A 桥可用 |
+  | 4-pin 风扇 | ✅ 可控 | ✅ 可控 |
+  | **3-pin 风扇** | ❌ **控不了** | ❌ **同样控不了** |
+
+  **所以：p2afan 的强项是"多通道"和"不依赖厂商命令"，不是"能控 3-pin 风扇"。**
+  3-pin 风扇没有 PWM 输入脚是**硬件层面**的限制，换任何软件都绕不过 ——
+  只能换 4-pin 风扇（或改用支持电压调速的硬件，但服务器主板通常不支持）。
+  本站实测见上文「3-pin 风扇不受 PWM 控制」。
+
+  **什么时候该用它**：你需要给**多个风扇各自一条曲线**（例如 2 张显卡 + 硬盘笼 +
+  CPU 分别按不同温度调速），而厂商命令只暴露了一个通道 —— 这时 p2afan 是唯一选择。
 
 本项目的实现是独立的，未复制上述项目的代码。
+
+### 参考资料
+
+仓库 [`docs/`](docs/) 里收录了 **TYAN/MiTAC 官方主板手册**
+（`S8030_v2.0c_031326.pdf`，Rev 2.0c，156 页），并对本项目相关的页码做了导航，
+方便你核对本文的技术判断：
+
+| 页码 | 内容 | 用在哪 |
+|---|---|---|
+| p26 | LED Definitions | 排查主板红灯/橙灯 |
+| p33–34 | Installing the Memory / **Memory Population Table** | 4 条内存的正确插法（C0/D0/G0/H0） |
+| **p72** | Hardware Health Configuration | **`Fan Speed Control` / `PWM Minimal Duty Cycle`** —— 为什么 BMC 没有温度曲线 |
+| **p141–144** | Appendix II: Fan and Temp Sensors | **`MB_Air_Inlet` 的定义与板图位置** —— 为什么它会被显卡尾气烤到 |
+
+> 手册版权归 MiTAC Computing Technology Corporation 所有，此处收录仅为方便对照，
+> 官方下载入口：<https://www.tyan.com/support/download-center>。若权利人要求会立即移除。
 
 ---
 
